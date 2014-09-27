@@ -1,0 +1,132 @@
+#!/bin/bash
+
+### Written by Andrey Rozenberg (jaera at yandex.com), Ruhr-Universität Bochum
+
+### This program is free software: you can redistribute it and/or modify
+### it under the terms of the GNU General Public License as published by
+### the Free Software Foundation, either version 3 of the License, or
+### (at your option) any later version.
+
+### This program is distributed in the hope that it will be useful,
+### but WITHOUT ANY WARRANTY; without even the implied warranty of
+### MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+### GNU General Public License for more details.
+
+### You should have received a copy of the GNU General Public License
+### along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+timestart=$(date +"%s")
+
+die() {
+  echo $1 >&2
+  exit 1
+}
+
+trap 'killall' INT
+killall() {
+  trap '' INT TERM
+  kill -TERM 0
+  wait
+  echo
+  exit
+}
+
+## test whether the command is correct ##
+[[ "$1" =~ blast* ]] || die "Not a blast program '$1'"
+command -v "$1" >/dev/null 2>&1 || die "'$1' not found"
+
+num_threads=4
+
+## grasp the -query argument to replace it with owr pipe ##
+for ((j=$#;j>0;j--)); do
+  case "${!j}" in
+    '-query' | '-num_threads' | '-out' )
+      i=$((j-1))
+      k=$((j+1))
+      l=$((j+2))
+      opt=${!j//-/}
+      eval $opt=\${!k}
+      set -- "${@:1:i}" "${@:l}"
+    ;;
+  esac
+done
+
+## check the num_threads and availability of the paths ##
+[[ "$num_threads" =~ ^[1-9][0-9]*$ ]] || die "-num_threads is expected to be a positive number"
+[ -f "$query" ] || die 'Input file not found'
+[ -z "$out" ] && die 'Output file not specified'
+printf "" > "$out" || die 'Output file not available'
+
+## we need the $query.csv intermediate file to accurately partition the task ##
+if [ -f "$query.csv" ]; then
+  echo "File '$query.csv' already exists: taking it as input" >&2
+else
+  awk -F '\n' -v RS='>' 'NF>1{s="";for(i=2;i<=NF;i++)s=s$i;sub(",","",s);print $1","s}' "$query" > "$query.csv"
+# | perl -MList::Util=shuffle -e 'print shuffle<>' 
+fi
+
+## calculate the size of individual query ##
+n=$(wc -l < "$query.csv")
+((n>0)) || die 'Input file is empty'
+block=$((n/num_threads))
+echo "Chosen block size is $block sequences" >&2
+
+timeparse=$(date +"%s")
+echo 'Spent '$((timeparse-timestart))' sec on parsing' >&2
+
+## create the temporary files ##
+for ((i=1;i<=num_threads;i++)); do
+  out_tmp=$(mktemp -t tmp.XXXXXXXXXX)
+  out_files[$i]=$out_tmp
+done
+
+bar='===================================================================================================='
+blk='                                                                                                    '
+
+echo >&2
+echo "Temporary output files:" >&2
+echo ${out_files[@]} >&2
+echo >&2
+echo "Records consumed:" >&2
+printf '[%.*s] %d %%\r' 100 "$blk" 0 >&2
+
+## launch the blast tasks in the background ##
+## individual sequences are piped to blast from the csv files ##
+
+core='d=$1;for(i=2;i<NF;i++)d=d","$i;print ">"d"\n"$NF'
+for ((i=1;i<=num_threads;i++)); do
+  if ((i==num_threads)); then
+    k=$(bc -l <<< "100/$block")
+    b=$(bc -l <<< "$beg*$k")
+    ival=$((block/100))
+    ((ival==0)) && ival=1
+
+    ## one of the processes will also monitor the number of the consumed sequences ##
+
+    awk="NR<=$beg{next}{$core}NR%$ival==0{p=sprintf(\"%.f\",NR*$k-$b);r=100-p;system(\"printf '[%.*s%.*s] %d %%\r' \"p\" '$bar' \"r\" '$blk' \"p\" >&2\")}"
+  else
+    end=$((block*i))
+    awk="NR>$end{exit}NR>0$beg{$core}"
+    beg=$end
+  fi
+  eval "$@" -num_threads 1 -out ${out_files[$i]} -query <(awk -F ',' "$awk" "$query.csv") &
+done
+
+wait
+
+printf '[%.*s] %d %%\r' 100 "$bar" 100 >&2
+
+echo >&2
+echo >&2
+
+timeblast=$(date +"%s")
+echo 'Spent '$((timeblast-timeparse))' sec to do the blast' >&2
+
+cat ${out_files[@]} > "$out"
+rm ${out_files[@]}
+
+timeend=$(date +"%s")
+echo $(wc -l < "$out")" rows in the output file" >&2
+
+echo 'Spent '$((timeend-timeblast))' sec to do the rest' >&2
+
