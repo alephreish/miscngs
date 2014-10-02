@@ -12,6 +12,8 @@
 ### You should have received a copy of the GNU General Public License
 ### along with this program. If not, see <http://www.gnu.org/licenses/>.
 
+## Use as follows: breakpoints.pl -l [linear genomes] -c [circular genomes]
+
 use strict;
 use warnings;
 
@@ -83,16 +85,6 @@ while ( my ($gene, $count) = each %presence ) {
 
 undef %presence;
 
-sub find_end {
-	my $fname = shift;
-	return -1 if !defined($ends{$fname});
-	my $chrom = shift;
-	my $gene = shift;
-	my $end = $ends{$fname}{$chrom}[1] eq $gene;
-	return -1 if !$end && $ends{$fname}{$chrom}[0] ne $gene;
-	return $end;
-}
-
 sub end2end {
 	my $ename = shift;
 	my $l = shift;
@@ -101,19 +93,15 @@ sub end2end {
 	my $sr = shift;
 	foreach my $fname (@fnames) {
 		next if $fname eq $ename;
+		next if !defined($ends{$fname});
 		my $chroml = $chroms{$fname}{$l};
 		my $chromr = $chroms{$fname}{$r};
 		next if $chroml eq $chromr;
-		return 0 if keys(%{$genes{$fname}{$chroml}}) == 0 && keys(%{$genes{$fname}{$chromr}}) == 0;
-		my $endl = find_end($fname, $chroml, $l);
-		next if $endl < 0;
-		my $endr = find_end($fname, $chromr, $r);
-		next if $endr < 0;
 		return 0 if
-			( $endl && $sl ==  $strands{$fname}{$l} ||
-			 !$endl && $sl == -$strands{$fname}{$l} ) &&
-			(!$endr && $sr ==  $strands{$fname}{$r} ||
-			  $endr && $sr == -$strands{$fname}{$r} );
+			( $sl ==  $strands{$fname}{$l} && $ends{$fname}{$chroml}[1] eq $l   ||
+			  $sl == -$strands{$fname}{$l} && $ends{$fname}{$chroml}[0] eq $l ) &&
+			( $sr ==  $strands{$fname}{$r} && $ends{$fname}{$chromr}[0] eq $r   ||
+			  $sr == -$strands{$fname}{$r} && $ends{$fname}{$chromr}[1] eq $r );
 	}
 	return 1;
 }
