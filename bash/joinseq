@@ -37,7 +37,14 @@ else
   exec 7>&1
 fi
 
-compl='{ r=NR%4 } r==2 { "echo \""$1"\" | tr \"AGCTYRKMDVHB\" \"TCGARYMKHBDV\"" | getline $1 } r%2 {$0=""}1'
+compl='if ($.%4%2) {
+    print "\n";
+  } else {
+    chomp;
+    tr/AGCTYRKMDVHB/TCGARYMKHBDV/ if $.%4==2;
+    printf "%s\n", scalar reverse;
+  }'
+
 join='BEGIN { sq[0]=q; sq[2]=s }
   { r=NR%4 }
   r%2 { print $1; next }
@@ -46,5 +53,5 @@ join='BEGIN { sq[0]=q; sq[2]=s }
 s=$(printf %${pad}s | tr ' ' 'N')
 q=$(printf %${pad}s | tr ' ' '!')
 
-paste - <&3 <(awk "$compl" <&4 | rev) | awk -v s=$s -v q=$q -v pad=$pad "$join" >&7
+paste - <&3 <(perl -ne "$compl" <&4) | awk -v s=$s -v q=$q -v pad=$pad "$join" >&7
 
