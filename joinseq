@@ -1,0 +1,57 @@
+#!/bin/bash
+
+### Written by Andrey Rozenberg (jaera at yandex.com), Ruhr-Universität Bochum
+### This program is free software: you can redistribute it and/or modify
+### it under the terms of the GNU General Public License as published by
+### the Free Software Foundation, either version 3 of the License, or
+### (at your option) any later version.
+### This program is distributed in the hope that it will be useful,
+### but WITHOUT ANY WARRANTY; without even the implied warranty of
+### MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+### GNU General Public License for more details.
+### You should have received a copy of the GNU General Public License
+### along with this program. If not, see <http://www.gnu.org/licenses/>.
+
+### Use as follows: joinfq [left reads file] [right reads file] [desired padding length] <output-gzip-flag> > <output file>
+
+l=$1
+r=$2
+pad=$3
+gz=$4
+
+if [[ "$l" =~ \.gz$ ]]; then
+  exec 3< <(gzip -cd "$l")
+else
+  exec 3< "$l"
+fi
+
+if [[ "$r" =~ \.gz$ ]]; then
+  exec 4< <(gzip -cd "$r")
+else
+  exec 4< "$r"
+fi
+
+if [[ "$gz" ]]; then
+  exec 7> >(gzip -c)
+else
+  exec 7>&1
+fi
+
+compl='if ($.%4%2) {
+    print "\n";
+  } else {
+    chomp;
+    tr/AGCTYRKMDVHB/TCGARYMKHBDV/ if $.%4==2;
+    printf "%s\n", scalar reverse;
+  }'
+
+join='BEGIN { sq[0]=q; sq[2]=s }
+  { r=NR%4 }
+  r%2 { print $1; next }
+  { printf "%s%*.*s%s\n", $1, 0, pad-length($1)-length($2), sq[r], $2 }'
+
+s=$(printf %${pad}s | tr ' ' 'N')
+q=$(printf %${pad}s | tr ' ' '!')
+
+paste - <&3 <(perl -ne "$compl" <&4) | awk -v s=$s -v q=$q -v pad=$pad "$join" >&7
+
