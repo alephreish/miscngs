@@ -31,8 +31,6 @@ killall() {
 	exit
 }
 
-command -v awk >/dev/null 2>&1 || die "awk not found"
-
 ## test whether the command is correct
 [[ "$1" =~ blast* ]] || die "Not a blast program '$1'"
 command -v "$1" >/dev/null 2>&1 || die "'$1' not found"
@@ -53,6 +51,17 @@ for ((j=$#;j>0;j--)); do
 		;;
 	esac
 done
+
+## check the num_threads and availability of the paths
+[[ "$num_threads" =~ ^[1-9][0-9]*$ ]] || die "-num_threads is expected to be a positive number"
+[ -f "$query" ]                       || die 'Input file not found'
+if [ -z "$out" ]; then
+	echo "Attention: no output file specified, the output will be printed to stdout in the end of the run" >&2
+else
+	printf "" > "$out" || die 'Output file not available'
+fi
+
+# build the command
 cmd=""
 for ((j=1;j<=$#;j++)); do
 	case "${!j}" in
@@ -65,13 +74,6 @@ for ((j=1;j<=$#;j++)); do
 done
 cmd+=" -num_threads 1"
 
-## check the num_threads and availability of the paths
-[[ "$num_threads" =~ ^[1-9][0-9]*$ ]] || die "-num_threads is expected to be a positive number"
-[ -f "$query" ]                       || die 'Input file not found'
-if [ ! -z "$out" ]; then
-	printf "" > "$out" || die 'Output file not available'
-fi
-
 ## calculate the size of individual query
 n=$(awk '/^>/{n++}END{print n}' "$query")
 ((n>0)) || die 'Input file is empty'
@@ -83,7 +85,12 @@ echo 'Spent '$((timeparse-timestart))' sec on parsing' >&2
 
 ## create the temporary files
 for ((i=1;i<=num_threads;i++)); do
-	out_tmp=$(mktemp -t tmp.XXXXXXXXXX)
+	if [ -z "$out" ]; then
+		out_tmp=$(mktemp -t tmp.XXXXXXXXXX)
+	else
+		out_tmp="$out.$i"
+		[ -s "$out_tmp" ] && die "$out_tmp already exists: rename or relocate it first"
+	fi
 	out_files[$i]=$out_tmp
 done
 
@@ -95,7 +102,10 @@ echo "Temporary output files:" >&2
 echo ${out_files[@]} >&2
 echo >&2
 echo "Records consumed:" >&2
-printf '[%.*s] %d %%\r' 100 "$blk" 0 >&2
+
+progformat='[%.*s%.*s] %d %%\r'
+
+printf "$progformat" 100 "$blk" >&2
 
 ## launch the blast tasks in the background
 ## individual sequences are piped to blast
@@ -111,13 +121,16 @@ ival=$((block/100))
 ((ival==0)) && ival=1
 
 ## one of the processes will also monitor the number of the consumed sequences
-$cmd -out ${out_files[$num_threads]} -query <(awk -v block=$block -v beg=$beg -v end=$end -v ival=$ival -v bar="$bar" -v blk="$blk" "
-		BEGIN{k=100/block;b=beg*k}
-		/^>/{n++}n<=beg{next}{print;p=sprintf(\"%d\",n*k-b)}n%ival==0&&p-pold>.1{pold=p;r=100-p;system(\"printf '[%.*s%.*s] %d %%\r' \"p\" '\"bar\"' \"r\" '\"blk\"' \"p\" >&2\")}" "$query") &
+
+$cmd -out ${out_files[$num_threads]} -query <(awk \
+	-v block=$block -v beg=$beg -v ival=$ival -v bar=" '$bar' " -v blk=" '$blk' " -v progprintf="printf '$progformat' " '
+		BEGIN { k=100/block; b=beg*k }
+		/^>/{n++}n<=beg{next}{print;p=sprintf("%d",n*k-b)}n%ival==0&&p-pold>.1{pold=p;r=100-p;system(progprintf p bar r blk p " >&2")}
+	' "$query") &
 
 wait
 
-printf '[%.*s] %d %%\r' 100 "$bar" 100 >&2
+printf "$progformat\n" 100 "$bar" 100 >&2
 
 echo >&2
 echo >&2
@@ -125,13 +138,14 @@ echo >&2
 timeblast=$(date +"%s")
 echo 'Spent '$((timeblast-timeparse))' sec to do the blast' >&2
 
+prefix="rows in the output file"
 if [ ! -z "$out" ]; then
-	cat ${out_files[@]} > "$out" && rm ${out_files[@]}
+	rows=$(cat ${out_files[@]} | tee "$out" | wc -l && rm ${out_files[@]})
+	echo "$rows $prefix" >&2
 else
-	cat ${out_files[@]}          && rm ${out_files[@]}
+	cat ${out_files[@]} | tee >(wc -l | { read rows; echo "$rows $prefix" >&2; }) && rm ${out_files[@]}
 fi
 
 timeend=$(date +"%s")
-echo $(wc -l < "$out")" rows in the output file" >&2
 
 echo 'Spent '$((timeend-timeblast))' sec to do the rest' >&2
