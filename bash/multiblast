@@ -17,25 +17,58 @@
 
 timestart=$(date +"%s")
 
+bar='===================================================================================================='
+blk='                                                                                                    '
+progformat='[%.*s%.*s] %d %%\r'
+declare -a cmd
+[ ! -z "$PBS_O_WORKDIR" ] && cd "$PBS_O_WORKDIR"
+
 die() {
 	echo $1 >&2
 	exit 1
 }
 
-trap 'killall' EXIT
-killall() {
+trap cleanup EXIT
+cleanup() {
 	trap '' INT TERM
 	kill -TERM 0
 	wait
-	echo
 	exit
+}
+
+standard_job() {
+	local output=$1
+	local beg=$2
+	local end=$3
+	"${cmd[@]}" -num_threads 1 -out "$output" -query <(awk -v beg="$beg" -v end="$end" '/^>/{n++}n>end{exit}n>beg' "$query")
+}
+
+progress_job() {
+	local output=$1
+	local beg=$2
+	local chunk=$3
+	echo "Records consumed:" >&2
+
+	printf "$progformat" 100 "$blk" >&2
+
+	"${cmd[@]}" -num_threads 1 -out "$output" -query <(awk \
+		-v chunk=$chunk -v beg=$beg -v bar=" '$bar' " -v blk=" '$blk' " -v progprintf="printf '$progformat' " '
+			BEGIN { k=100/chunk; b=beg*k; ival=1; if (k<1) ival=sprintf("%d",1/k) }
+			/^>/{n++}n<=beg{next}{print;p=sprintf("%d",n*k-b);if(p>100)p=100}n%ival==0&&p-pold>.1{pold=p;r=100-p;system(progprintf p bar r blk p " >&2")}
+		' "$query")
+}
+
+print_interval() {
+	local beg=$1
+	local end=$2
+	printf "Sequences [%d; %d]\n" $((beg+1)) $end >&2
 }
 
 ## test whether the command is correct
 [[ "$1" =~ blast* ]] || die "Not a blast program '$1'"
 command -v "$1" >/dev/null 2>&1 || die "'$1' not found"
 
-num_threads=4
+num_threads=1
 out=""
 
 ## grasp the -query argument to replace it with own pipe
@@ -52,100 +85,67 @@ for ((j=$#;j>0;j--)); do
 	esac
 done
 
-## check the num_threads and availability of the paths
-[[ "$num_threads" =~ ^[1-9][0-9]*$ ]] || die "-num_threads is expected to be a positive number"
-[ -f "$query" ]                       || die 'Input file not found'
-if [ -z "$out" ]; then
-	echo "Attention: no output file specified, the output will be printed to stdout in the end of the run" >&2
-else
-	printf "" > "$out" || die 'Output file not available'
-fi
+cmd=("$@")
 
-# build the command
-cmd=""
-for ((j=1;j<=$#;j++)); do
-	case "${!j}" in
-		*\ * )
-			cmd+=" \"${!j}\""
-					;;
-		*)
-			cmd+=" ${!j}"
-	esac
-done
-cmd+=" -num_threads 1"
+## check the num_threads and availability of the paths
+[[ "$num_threads" =~ ^[1-9][0-9]*$ ]] || die "-num_threads is expected to be an unsigned integer"
+[ -f "$query" ]                       || die 'Input file not found'
+
+[ -z "$out" ] && die "No output prefix specified"
 
 ## calculate the size of individual query
 n=$(awk '/^>/{n++}END{print n}' "$query")
-((n>0)) || die 'Input file is empty'
-block=$((n/num_threads))
-echo "The chosen block size is $block sequences" >&2
-
-timeparse=$(date +"%s")
-echo 'Spent '$((timeparse-timestart))' sec on parsing' >&2
-
-## create the temporary files
-for ((i=1;i<=num_threads;i++)); do
-	if [ -z "$out" ]; then
-		out_tmp=$(mktemp -t tmp.XXXXXXXXXX)
-	else
-		out_tmp="$out.$i"
-		[ -s "$out_tmp" ] && die "$out_tmp already exists: rename or relocate it first"
-	fi
-	out_files[$i]=$out_tmp
-done
-
-bar='===================================================================================================='
-blk='                                                                                                    '
-
-echo >&2
-echo "Temporary output files:" >&2
-echo ${out_files[@]} >&2
-echo >&2
-echo "Records consumed:" >&2
-
-progformat='[%.*s%.*s] %d %%\r'
-
-printf "$progformat" 100 "$blk" >&2
-
-## launch the blast tasks in the background
-## individual sequences are piped to blast
-
-beg=0
-for ((i=1;i<num_threads;i++)); do
-	end=$((block*i))
-	$cmd -out ${out_files[$i]} -query <(awk -v beg=$beg -v end=$end '/^>/{n++}n>end{exit}n>beg' "$query") &
-	beg=$end
-done
-
-ival=$((block/100))
-((ival==0)) && ival=1
-
-## one of the processes will also monitor the number of the consumed sequences
-
-$cmd -out ${out_files[$num_threads]} -query <(awk \
-	-v block=$block -v beg=$beg -v ival=$ival -v bar=" '$bar' " -v blk=" '$blk' " -v progprintf="printf '$progformat' " '
-		BEGIN { k=100/block; b=beg*k }
-		/^>/{n++}n<=beg{next}{print;p=sprintf("%d",n*k-b)}n%ival==0&&p-pold>.1{pold=p;r=100-p;system(progprintf p bar r blk p " >&2")}
-	' "$query") &
-
-wait
-
-printf "$progformat\n" 100 "$bar" 100 >&2
-
-echo >&2
-echo >&2
-
-timeblast=$(date +"%s")
-echo 'Spent '$((timeblast-timeparse))' sec to do the blast' >&2
-
-prefix="rows in the output file"
-if [ ! -z "$out" ]; then
-	rows=$(cat ${out_files[@]} | tee "$out" | wc -l && rm ${out_files[@]})
-	echo "$rows $prefix" >&2
-else
-	cat ${out_files[@]} | tee >(wc -l | { read rows; echo "$rows $prefix" >&2; }) && rm ${out_files[@]}
+((n>0)) || die 'Input file seems to be empty'
+chunk=$((n/num_threads))
+if [[ $chunk -eq 0 ]]; then
+	chunk=n
+	num_threads=1
+	echo "Warning: number of sequences is lower than the number of the threads, reducing to one thread" >&2
 fi
 
-timeend=$(date +"%s")
+printf "The chosen chunk size is %d sequences\n" $chunk >&2
 
-echo 'Spent '$((timeend-timeblast))' sec to do the rest' >&2
+if [ ! -z "$PBS_ARRAYID" ]; then
+	# if we are running on a cluster
+	[[ "$PBS_ARRAYID" -gt "$num_threads" ]] && die "Job array id is greater than the number of the requested threads"
+	out_file="$out.$PBS_ARRAYID-$num_threads"
+	[ -s "$out_file" ] && die "$out_file already exists, exiting"
+	echo "Output file for this job:" >&2
+	echo "$out_file" >&2
+	beg=$((chunk*(PBS_ARRAYID-1)))
+	if [[ "$PBS_ARRAYID" -eq "$num_threads" ]]; then
+		end=$n
+	else
+		end=$((chunk*PBS_ARRAYID))
+	fi
+	print_interval $beg $end
+	standard_job "$out_file" $beg $end
+else
+	# if we are running locally
+	for ((i=1;i<=num_threads;i++)); do
+		out_file="$out.$i-$num_threads"
+		[ -s "$out_file" ] && die "$out_file already exists: rename or relocate it first"
+	done
+	echo "Output files:" >&2
+	beg=0
+	## launch the blast tasks in the background
+	## individual sequences are piped to blast
+	for ((i=1;i<num_threads;i++)); do
+		out_file="$out.$i-$num_threads"
+		echo "$out_file" >&2
+		end=$((chunk*i))
+		print_interval $beg $end
+		standard_job "$out_file" $beg $end &
+		beg=$end
+	done
+	## one of the processes will also monitor the number of the consumed sequences
+	echo "$out.$num_threads-$num_threads" >&2
+	print_interval $beg $n
+	echo >&2
+	progress_job "$out.$num_threads-$num_threads" $beg $chunk
+	wait
+	printf "$progformat\n" 100 "$bar" 0 0 100 >&2
+fi
+
+timeblast=$(date +"%s")
+echo 'Spent '$((timeblast-timestart))' sec' >&2
