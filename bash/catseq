@@ -43,7 +43,7 @@ run_catfq() {
   awk -v s=$s -v q=$q -v len=$1 'BEGIN { sq[0]=q; sq[2]=s }
     { r=NR%4 }
     r%2 { print; next }
-    { printf $1""substr(sq[r], 1, len-length($1))"\n" }'
+    { printf "%s%s\n", $1, substr(sq[r], 1, len-length($1)) }'
 }
 
 run_catfq $pad <&3 >&7
