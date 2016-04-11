@@ -12,40 +12,64 @@
 ### You should have received a copy of the GNU General Public License
 ### along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-### Use as follows: catfq [left reads file] [right reads file] [desired padding length] <output-gzip-flag> > <output file>
+die() {
+	echo "$@" >&2
+	exit 1
+}
+
+if [[ -z "$1" || "$1" == "-h" ]]; then
+	echo "Use as catfq [left reads file] [right reads file] [left read len] [right read len] [spacer len] <output-gzip-flag> > <output file>"
+	exit 0
+fi
 
 l=$1
 r=$2
-pad=$3
-gz=$4
+
+ll=$3
+rl=$4
+sl=$5
+gz=$6
+
+[[ "$ll" =~ ^[1-9][0-9]*$ ]]  || die "Left read length is expected to be a number"
+[[ "$rl" =~ ^[1-9][0-9]*$ ]]  || die "Right read length is expected to be a number"
+[[ "$sl" =~ ^[1-9][0-9]*$ ]]  || die "Spacer length is expected to be a number"
+[[ "$ll" -ge "$rl" ]]         || die "Left reads are not allowed to be shorter than right reads: $ll < $rl"
+[[ -z "$gz" || "$gz" == gz ]] || die "Gzip-flag is expected to be empty or equal to 'gz'"
+
+pad=$((ll+sl))
 
 if [[ "$l" =~ \.gz$ ]]; then
-  exec 3< <(gzip -cd "$l")
+	exec 3< <(gzip -cd "$l")
 else
-  exec 3< "$l"
+	exec 3< "$l"
 fi
 
 if [[ "$r" =~ \.gz$ ]]; then
-  exec 4< <(gzip -cd "$r")
+	exec 4< <(gzip -cd "$r")
 else
-  exec 4< "$r"
+	exec 4< "$r"
 fi
 
-if [[ "$gz" ]]; then
-  exec 7> >(gzip -c)
+if [ -z "$gz" ]; then
+	exec 7>&1
 else
-  exec 7>&1
+	exec 7> >(gzip -c)
 fi
 
 run_catfq() {
-  s=$(printf %${1}s | tr ' ' 'N')
-  q=$(printf %${1}s | tr ' ' '!')
-  awk -v s=$s -v q=$q -v len=$1 'BEGIN { sq[0]=q; sq[2]=s }
-    { r=NR%4 }
-    r%2 { print; next }
-    { printf "%s%s\n", $1, substr(sq[r], 1, len-length($1)) }'
+	local len=$1
+	local pad=$2
+	s=$(printf "%${pad}s" | tr ' ' 'N')
+	q=$(printf "%${pad}s" | tr ' ' '!')
+	awk -v s="$s" -v q="$q" -v len="$len" -v pad="$pad" 'BEGIN { sq[0]=q; sq[2]=s }
+		{ r=NR%4 }
+		r%2 { print; next }
+		{
+			$1 = substr($1, 1, len)
+			space = substr(sq[r], 1, pad - length($1))
+			printf "%s%s\n", $1, space
+		}'
 }
 
-run_catfq $pad <&3 >&7
-run_catfq $pad <&4 >&7
-
+run_catfq "$ll" "$pad" <&3 >&7
+run_catfq "$rl" "$pad" <&4 >&7

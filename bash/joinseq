@@ -14,27 +14,47 @@
 
 ### Use as follows: joinfq [left reads file] [right reads file] [desired padding length] <output-gzip-flag> > <output file>
 
+die() {
+	echo "$@" >&2
+	exit 1
+}
+
+if [[ -z "$1" || "$1" == "-h" ]]; then
+	echo "Use as joinfq [left reads file] [right reads file] [left read len] [right read len] [spacer len] <output-gzip-flag> > <output file>" >&2
+	exit 0
+fi
+
 l=$1
 r=$2
-pad=$3
-gz=$4
+
+ll=$3
+rl=$4
+sl=$5
+gz=$6
+
+[[ "$ll" =~ ^[1-9][0-9]*$ ]] || die "Left read length is expected to be a number"
+[[ "$rl" =~ ^[1-9][0-9]*$ ]] || die "Right read length is expected to be a number"
+[[ "$sl" =~ ^[1-9][0-9]*$ ]] || die "Spacer length is expected to be a number"
+[[ -z "$gz" || "$gz" == gz ]] || die "Gzip-flag is expected to be empty or equal to 'gz'"
+
+pad=$((ll+rl+sl))
 
 if [[ "$l" =~ \.gz$ ]]; then
-  exec 3< <(gzip -cd "$l")
+	exec 3< <(gzip -cd "$l")
 else
-  exec 3< "$l"
+	exec 3< "$l"
 fi
 
 if [[ "$r" =~ \.gz$ ]]; then
-  exec 4< <(gzip -cd "$r")
+	exec 4< <(gzip -cd "$r")
 else
-  exec 4< "$r"
+	exec 4< "$r"
 fi
 
 if [[ "$gz" ]]; then
-  exec 7> >(gzip -c)
+	exec 7> >(gzip -c)
 else
-  exec 7>&1
+	exec 7>&1
 fi
 
 compl='if ($.%4%2) {
@@ -46,12 +66,16 @@ compl='if ($.%4%2) {
   }'
 
 join='BEGIN { sq[0]=q; sq[2]=s }
-  { r=NR%4 }
-  r%2 { print $1; next }
-  { printf "%s%*.*s%s\n", $1, 0, pad-length($1)-length($2), sq[r], $2 }'
+	{ r=NR%4 }
+	r%2 { print $1; next }
+	{
+		$1 = substr($1, 1, ll)
+		$2 = substr($2, length($2) - rl + 1)
+		space = substr(sq[r], 1, pad - length($1) - length($2))
+		printf "%s%s%s\n", $1, space, $2
+	}'
 
 s=$(printf %${pad}s | tr ' ' 'N')
 q=$(printf %${pad}s | tr ' ' '!')
 
-paste - <&3 <(perl -ne "$compl" <&4) | awk -v s=$s -v q=$q -v pad=$pad "$join" >&7
-
+paste - <&3 <(perl -ne "$compl" <&4) | awk -v s="$s" -v q="$q" -v pad=$pad -v ll=$ll -v rl=$rl "$join" >&7
