@@ -7,9 +7,9 @@ use Bio::SeqIO;
 use Getopt::Std;
 
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
-my $version = "gbtag.pl v. 0.1\n";
+my $version = "biotags.pl v. 0.1\n";
 my $help    = "Use as:
-  gbtag.pl -i {input} [-p {primary}] -t {tags} [-H] [-d {delimiter}] > stdout
+  biotags.pl -i {input} [-p {primary}] -t {tags} [-H] [-d {delimiter}] > stdout
 
  -i - input file to parse
  -p - comma-separated list of primary tags to consider
@@ -34,6 +34,7 @@ sub HELP_MESSAGE {
 	print { $fp } $help;
 }
 
+# check input args
 die "Invalid gb specified\n" if not defined $opt_i or not -s $opt_i;
 die "No tags specified\n" if not $opt_t;
 $opt_d = "\t" if not defined $opt_d or $opt_d eq '\t';
@@ -41,10 +42,12 @@ my %primaries;
 if (defined $opt_p) {
 	$primaries{$_} = 1 for split /,/, $opt_p;
 }
-
 my @tags = split /,/, $opt_t;
+
+# print the header if requested
 printf "%s\n", join $opt_d, @tags if defined $opt_H;
 
+# open the input and iterate over individual seqs/features
 my $in = Bio::SeqIO->new(-file => $opt_i) or die "$!\n";
 for my $seq ($in->next_seq) {
 	for my $feature ($seq->get_SeqFeatures) {
@@ -55,22 +58,31 @@ for my $seq ($in->next_seq) {
 	}
 }
 
+# get value for a given feature/tag pair
 sub get_tag_values {
 	my $feature = shift;
 	my $tag = shift;
+
+	# first check explicit tags
 	if ($feature->has_tag($tag)) {
 		return join ';', $feature->get_tag_values($tag);
 	}
+
+	# then object members
 	if ($feature->can($tag)) {
 		my $val = $feature->$tag;
 		ref($val) eq 'Bio::PrimarySeq' ? return $val->seq : return $val;
 	}
+
+	# and reserved tags
 	if ($tag eq 'translate') {
 		return translate_feature($feature);
 	}
+
 	return '';
 }
 
+# translate the feature anew
 sub translate_feature {
 	my $feature = shift;
 	my $seq = $feature->spliced_seq;
