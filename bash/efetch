@@ -1,0 +1,11 @@
+#!/bin/bash
+
+id=$1
+db=$2
+rettype=$3
+
+[ -z "$id"      ] && { echo "No id specified" >&2; exit 1; }
+[ -z "$db"      ] && { echo "No db specified" >&2; exit 1; }
+[ -z "$rettype" ] && rettype=gbwithparts
+
+curl -s --data "id=$id" "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=$db&rettype=$rettype&showgi=1"
