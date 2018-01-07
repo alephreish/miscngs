@@ -7,17 +7,87 @@ use Bio::SeqIO;
 use Getopt::Std;
 
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
-my $version = "biotags.pl v. 1.0\n";
+my $version = "biotags.pl v. 1.1\n";
 my $help    = "Use as:
   biotags.pl -i {input} [-p {primary}] -t {tags} [-H] [-d {delimiter}] > stdout
 
  -i - input file to parse
  -p - comma-separated list of primary tags to consider
- -T - comma-separated list of sequence tags (includes 'primary_id', 'desc' etc.,
-      as well as 'translate', 'revcom' etc.)
- -t - comma-separated list of feature tags (includes all explicitely named tags,
-      as well as 'start', 'strand', 'spliced_seq', 'get_all_tags' etc. and
-      a reserved tag 'join')
+ -T - comma-separated list of sequence tags:
+
+      accession (=accession_number)
+      accession_number
+      alphabet (dna, rna or protein)
+      annotation (defaults to comment)
+          comment
+          reference
+          # etc.
+      authority
+      can_call_new (useless)
+      definition (=desc)
+      desc
+      description
+      display_id
+      feature_count
+      get_num_of_annotations
+      id
+      is_circular
+      keywords
+      length
+      locus (=display_id)
+      namespace
+      object_id
+      organism (=species)
+      primary_id
+      revcom
+      seq
+      source (=species)
+      species (defaults to binomial)
+          binomial
+          classification
+          common_name
+          division
+          genus
+          ncbi_taxid
+          organelle
+          species
+          sub_species
+          taxon (not implemented)
+          tree (not implemented)
+          variant
+      subseq (throws exception)
+      translate
+      trunc (throws exception)
+      version
+
+ -t - comma-separated list of feature tags. Any named tag can be used, as well as:
+
+      attach_seq (throws exception, useless)
+      contains (throws exception, useless)
+      display_name
+      end
+      entire_seq
+      equals (throws exception)
+      get_all_tags
+      get_tagset_values
+      get_tag_values
+      gff_string
+      has_tag (useless)
+      intersection (throws exception, useless)
+      location (formatted)
+      overlaps (throws exception, useless)
+      phase (throws exception)
+      primary_id (throws exception)
+      primary_tag
+      seq
+      seq_id
+      source_tag
+      spliced_seq
+      start
+      _static_gff_formatter (not implemented)
+      strand
+      union (throws exception, useless)
+
  -H - whether to include header in the output
  -d - field delimiter (tab is the default)
 
@@ -88,13 +158,11 @@ sub get_tag_values {
 	# then object members
 	if ($feature->can($tag)) {
 		my @vals = $feature->$tag;
-		return $vals[0]->seq if ref($vals[0]) eq 'Bio::PrimarySeq';
+		my $val = $vals[0];
+		my $ref = ref($val);
+		return $val->seq if $ref eq 'Bio::PrimarySeq';
+		return feature_location($feature) if $ref =~ /Bio::Location/;
 		return join ";", @vals;
-	}
-
-	# and reserved tags
-	if ($tag eq 'join') {
-		return join_feature($feature);
 	}
 	return '';
 }
@@ -103,6 +171,9 @@ sub get_tag_values {
 sub get_seq_values {
 	my $seq = shift;
 	my $tag = shift;
+
+	return '' if $tag eq 'new' or $tag =~ /validate/;
+
 	my %replace = (
 		locus      => 'display_id',
 		definition => 'desc',
@@ -110,19 +181,33 @@ sub get_seq_values {
 		organism   => 'species',
 		source     => 'species'
 	);
+
 	$tag = $replace{$tag} if defined $replace{$tag};
 	if ($seq->can($tag)) {
 		my @vals = $seq->$tag;
-		my $ref = ref($vals[0]);
-		return $vals[0]->seq      if $ref eq 'Bio::Seq::RichSeq';
-		return $vals[0]->binomial if $ref eq 'Bio::Species';
+		my $val  = $vals[0];
+		return '' if not defined $val;
+		my $ref  = ref($val);
+		return $val->seq      if $ref eq 'Bio::Seq::RichSeq';
+		return $val->binomial if $ref eq 'Bio::Species';
 		return join ";", @vals;
+	}
+	my @ac = $seq->get_Annotations($tag);
+	if (@ac) {
+		my @vals;
+		push @vals, $_->display_text for (@ac);
+		return join ';', @vals;
+	}
+	my $species = $seq->species;
+	if ($species->can($tag)) {
+		my @vals = $species->$tag;
+		return join ';', @vals if defined $vals[0];
 	}
 	return '';
 }
 
 # extract join'ed segment coordinates
-sub join_feature {
+sub feature_location {
 	my $feature = shift;
 	my $loc = $feature->location;
 	return location_range($loc) if not $loc->isa('Bio::Location::SplitLocationI');
