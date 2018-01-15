@@ -11,7 +11,8 @@ my $help    = "Use as:
   biotags.pl -i {input} [-p {primary}] -t {tags} [-H] [-d {delimiter}] > stdout
 
  -i - input file to parse
- -p - comma-separated list of primary tags to consider
+ -p - comma-separated list of primary tags
+ -a - comma-separated list of accessions
  -H - whether to include header in the output
  -d - field delimiter (tab is the default)
  -T - comma-separated list of sequence tags (call -T? to show the list)
@@ -21,9 +22,9 @@ my $help    = "Use as:
 from https://github.com/har-wradim/miscngs/
 ";
 
-our($opt_v, $opt_h, $opt_i, $opt_T, $opt_t, $opt_p, $opt_H, $opt_d);
+our($opt_v, $opt_h, $opt_i, $opt_T, $opt_t, $opt_p, $opt_H, $opt_d, $opt_a);
 
-die $help    if not getopts('hvHi:T:t:p:d:') or $opt_h;
+die $help    if not getopts('hvHi:a:T:t:p:d:') or $opt_h;
 die $version if $opt_v;
 if (defined $opt_T and $opt_T eq '?') {
 	print "accession (=accession_number)
@@ -110,10 +111,14 @@ die "No input file specified\n" if not    $opt_i;
 print STDERR "No tags specified\n" if not $opt_t and not $opt_T;
 
 $opt_d = "\t" if not defined $opt_d or $opt_d eq '\t';
+
 my %primaries;
-if (defined $opt_p) {
-	$primaries{$_} = 1 for split /,/, $opt_p;
-}
+if (defined $opt_p) { $primaries{$_}  = 1 for split /,/, $opt_p }
+
+my %accessions;
+if (defined $opt_a) { $accessions{$_} = 1 for split /,/, $opt_a }
+my $accn = -1;
+$accn = scalar keys %accessions if defined $opt_a;
 
 my @stags = ();
 my @ftags = ();
@@ -127,6 +132,7 @@ printf "%s\n", join $opt_d, (@stags, @ftags) if defined $opt_H;
 # open the input and iterate over individual seqs/features
 my $in = Bio::SeqIO->new(-file => $opt_i) or die "$!\n";
 while (my $seq = $in->next_seq) {
+	next if $opt_a and not $accessions{$seq->id};
 	if ($opt_t) {
 		for my $feature ($seq->get_SeqFeatures) {
 			next if $opt_p and not $primaries{$feature->primary_tag};
@@ -141,6 +147,7 @@ while (my $seq = $in->next_seq) {
 		push @vals, get_seq_values($seq, $_) for @stags;
 		printf "%s\n", join $opt_d, @vals if @vals;
 	}
+	last if --$accn == 0;
 }
 
 # get value for a given feature/tag pair
